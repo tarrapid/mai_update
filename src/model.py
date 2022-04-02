@@ -1,15 +1,9 @@
+from typing import Optional
+
 import numpy as np
 
+from src.utils import sgn, cache
 from src.condition import Condition, intersection
-
-
-def sgn(x: float) -> int:
-    if x > 0:
-        return 1
-    elif x < 0:
-        return -1
-    else:
-        return 0
 
 
 class Model:
@@ -40,6 +34,8 @@ class Model:
         self.eps_wave = 2 * abs(c * eps / b)
 
         # TODO: add assert
+        # TODO: add DocString
+        # TODO: add Dymmy test
 
     # System & criterion
     def f(self, x: np.array, u: float, ksi: float):
@@ -76,6 +72,7 @@ class Model:
         return -(k2 + k3)/k1
 
     # Step N-1
+    @cache
     def cond_I_N_1(self):
         if np.abs(self.vec_lambda[-1] * self.c * self.eps) <= self.fi:
             return intersection([
@@ -86,11 +83,13 @@ class Model:
         else:
             return None
 
+    @cache
     def cond_delta_I(self, k: int):
         m_Lambda = self.mtx_Lambda(k)
         return Condition(m_Lambda, np.full(m_Lambda.shape[0], self.fi))
 
     # Suboptimal control k=0,...,N-2
+    @cache
     def nn(self, k):
         if k == self.N - 2:
             return int(0.5 * self.n * (self.n - 1))
@@ -104,20 +103,24 @@ class Model:
     #             return (i-1)*(self.nn(k+1) + n) + j - 1
     #         else:
     #             return None
-
+    @cache
     def ep_Lambda(self, i, j, k):
         bb_val_i = self.bb(i, k)
         bb_val_j = self.bb(j, k)
 
-        if bb_val_i == 0 or bb_val_j == 0:
-            z1 = self.fi / (self.eps_wave + 2* self.fi)
-            z2 = self.aa(i, k).T - self.aa(j, k).T
-        else:
+        # if bb_val_i == 0 or bb_val_j == 0:
+        #     z1 = self.fi / (self.eps_wave + 2* self.fi)
+        #     z2 = self.aa(i, k).T - self.aa(j, k).T
+        # else:
+        if bb_val_i != 0 and bb_val_j != 0:
             z1 = self.fi / (self.eps_wave + (sgn(bb_val_i) + sgn(bb_val_j)) * self.fi)
             z2 = self.aa(i, k).T / bb_val_i - self.aa(j, k).T / bb_val_j
-        return (z1 * z2).reshape(1, -1)
+            return (z1 * z2).reshape(1, -1)
+        else:
+            return np.zeros_like(self.aa(i, k).T).reshape(1, -1)
 
-    def bb(self, i, k) -> int:
+    @cache
+    def bb(self, i, k) -> Optional[int]:
         if k in range(0, (self.N-2)+1):
             return (self.mtx_Lambda_wave(k + 1) @ self.vec_B)[i - 1][0]
         elif k == self.N-1:
@@ -125,6 +128,7 @@ class Model:
         else:
             return None
 
+    @cache
     def aa(self, i, k):
         if k in range(0, (self.N - 2) + 1):
             return (self.mtx_Lambda_wave(k + 1) @ self.mtx_A)[i - 1]
@@ -133,6 +137,7 @@ class Model:
         else:
             return None
 
+    @cache
     def mtx_Lambda(self, k):
         if k == self.N:
             concat = [
@@ -150,11 +155,14 @@ class Model:
             for i in range(1, cc + 1):
                 for j in range(1, cc + 1):
                     if i < j:
-                        res.append(self.ep_Lambda(i, j, k))
+                        val = self.ep_Lambda(i, j, k)
+                        if val is not None:
+                            res.append(val)
             return np.concatenate(res, axis=0)
         else:
             return None
 
+    @cache
     def mtx_Lambda_wave(self, k):
         if k in range(0, (self.N - 1) + 1):
             concat = [
@@ -166,6 +174,7 @@ class Model:
         else:
             return None
 
+    @cache
     def non_zero_I_N_2(self, k: int):
         if k in range(0, (self.N - 2) + 1):
             if k == self.N - 2:
@@ -178,6 +187,7 @@ class Model:
         else:
             return None
 
+    @cache
     def cond_I_other(self, k: int):
         if self.non_zero_I_N_2(k):
             return intersection([
@@ -198,32 +208,24 @@ class Model:
         cc = self.n if k == self.N-1 else self.nn(k) + self.n
         res = []
         for i in range(1, cc + 1):
-            for j in range(1, cc + 1):
-                if i < j:
-                    bb_val = self.bb(i, k)
-                    if bb_val == 0:
-                        val = self.fi - self.aa(i, k).T @ x
-                    else:
-                        val = (sgn(bb_val)*self.fi - self.aa(i, k).T @ x) / bb_val
-                    res.append(val)
+            bb_val = self.bb(i, k)
+            if bb_val != 0:
+                val = (sgn(bb_val)*self.fi - self.aa(i, k).T @ x) / bb_val
+                res.append(val)
         return min(res)
 
     def ffi_down(self, k, x):
-        cc = self.n if k == self.N - 1 else self.nn(k) + self.n
+        cc = self.n if k == self.N-1 else self.nn(k) + self.n
         res = []
         for i in range(1, cc + 1):
-            for j in range(1, cc + 1):
-                if i < j:
-                    bb_val = self.bb(i, k)
-                    if bb_val == 0:
-                        val = -self.fi - self.aa(i, k).T @ x
-                    else:
-                        val = -(sgn(bb_val)*self.fi - self.aa(i, k).T @ x) / bb_val
-                    res.append(val)
-
+            bb_val = self.bb(i, k)
+            if bb_val != 0:
+                val = (-sgn(bb_val)*self.fi - self.aa(i, k).T @ x) / bb_val
+                res.append(val)
         return max(res)
 
     # All result
+    @cache
     def cond_I(self, k: int):
         if k == self.N + 1:
             return self.cond_F()
@@ -234,7 +236,7 @@ class Model:
         else:
             return self.cond_I_other(k)
 
-    def gamma(self, k, x):
+    def gamma(self, k, x) -> Optional[int]:
         if k == self.N:
             return self.gamma_N(x)
         elif k in range(0, (self.N-1) + 1):
